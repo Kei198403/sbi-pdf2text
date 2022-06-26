@@ -1,0 +1,15 @@
+version: "3.9"
+
+services:
+  sbi_pdf2text:
+    image: "sbi-pdf2text:latest"
+    build:
+      context: ..
+      dockerfile: ./.devcontainer/python/Dockerfile
+    container_name: "sbi_pdf2text"
+    hostname: python
+    working_dir: /workspace
+    volumes:
+      - ..:/workspace
+    stdin_open: true
+    tty: true

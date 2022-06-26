@@ -1,0 +1,49 @@
+{
+    "python.pythonPath": "/workspace/.venv/bin/python",
+    "python.formatting.autopep8Path": "/workspace/.venv/bin/autopep8",
+    "python.linting.flake8Path": "/workspace/.venv/bin/flake8",
+    "python.linting.mypyPath": "/workspace/.venv/bin/mypy",
+    "python.linting.pylintPath": "/workspace/.venv/bin/pylint",
+    "[python]": {
+        "editor.tabSize": 4
+    },
+    "[dockerfile]": {
+        "editor.quickSuggestions": {
+            "strings": true
+        },
+        "editor.formatOnSave": false,
+    },
+    "python.linting.flake8Args": [
+        "--max-line-length",
+        "150"
+    ],
+    "python.linting.enabled": true,
+    "python.linting.pylintEnabled": false,
+    "python.linting.flake8Enabled": true,
+    "python.linting.lintOnSave": true,
+    "python.formatting.provider": "autopep8",
+    "python.formatting.autopep8Args": [
+        "--max-line-length",
+        "150",
+    ],
+    "editor.formatOnSave": true,
+    "python.linting.mypyEnabled": true,
+    "python.linting.mypyArgs": [
+        "--ignore-missing-imports", // サードパーティ製モジュールの型アノテーションチェックを無視
+        "--follow-imports=silent",
+        "--disallow-untyped-defs", // 関数定義時の型アノテーション強制
+        "--show-column-numbers",
+        "--no-implicit-optional", //  None へのOptionalアノテーション強制
+        "--check-untyped-defs",
+    ],
+    "python.testing.unittestArgs": [
+        "-v",
+        "-s",
+        "test",
+        "-p",
+        "test_*.py",
+    ],
+    "python.testing.pytestEnabled": false,
+    "python.testing.nosetestsEnabled": false,
+    "python.testing.unittestEnabled": true,
+}
