@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import sys
 import os
 import camelot
 import re
 import codecs
+import logging
 
 from os.path import join
 from typing import Final, List, cast, Generator
@@ -18,6 +20,7 @@ input_dir: Final[str] = "./input"
 output_dir: Final[str] = "./output"
 
 re_date_format = re.compile(r"\d{4}/\d{2}/\d{2}")
+logger = logging.getLogger(__name__)
 
 
 class PdfType(Enum):
@@ -65,18 +68,34 @@ def parse_japanese_stock_dividend_report(tables: TableList) -> Generator[List[st
 
         base_position = (3, 8)
         for pos in base_position:
-            # 「以下余白」が含まれている場合はスキップ
-            if "以下余白" in df.loc[pos][0]:
+            x_shift = 0
+
+            # 先頭列が空白になってしまっている場合の対策
+            for _ in range(len(df.loc[pos])):
+                if len(df.loc[pos][0 + x_shift].strip()) == 0:
+                    x_shift += 1
+                else:
+                    break
+            else:
+                # すべて空白の場合
+                raise ValueError("データ不正 table[{}]".format(i))
+
+            logger.info("国内配当pdf解析： x_shift: %d", x_shift)
+
+            # 「以下余白」が含まれている場合はスキップ x_shift対象
+            if "以下余白" in df.loc[pos][0+x_shift]:
                 continue
 
             # 改行区切りになっている銘柄名と銘柄コードを分割
-            corporation = cast(str, df.loc[pos][0]).split("\n")
+            corporation = cast(str, df.loc[pos][0+x_shift]).split("\n")
+
+            logger.info(f"国内配当pdf解析： corporation: {corporation}")
 
             data = list()
-            # 銘柄名
+            # 銘柄名 x_shift対象
             data.append(corporation[0].strip())
-            # 銘柄コード
-            data.append(zen_to_han(corporation[1].strip().replace("　", "").replace("（", "").replace("）", "")))
+            # 銘柄コード x_shift対象
+            data.append(zen_to_han(corporation[1].strip().replace("　", "").replace("（", "").replace("）", "").replace("\u3000", "")))
             # お支払日
             data.append(zen_to_han(df.loc[pos][4].replace("　", "")))
             # 配当単価（円）
@@ -179,6 +198,21 @@ def parse_global_stock_dividend_report(tables: TableList) -> Generator[List[str]
         yield data
 
 
+def debug_tables(tables: TableList) -> None:
+    for i in range(tables.n):
+        table: Table = tables[i]
+        df = cast(DataFrame, table.df)
+        logger.info("table[{}]".format(i))
+        df.to_csv(sys.stdout)
+
+
+def list2csv(csv_path: str, data_list: List[str], encoding: str = "cp932") -> None:
+    with codecs.open(csv_path, mode="w", encoding=encoding) as f:
+        for line in data_list:
+            f.write(line)
+            f.write("\n")
+
+
 def main() -> None:
     japanese_stock_dividend_list: List[str] = list()
     global_stock_dividend_list: List[str] = list()
@@ -187,36 +221,57 @@ def main() -> None:
     global_stock_dividend_list.append(
         "ファイルパス,配当金等支払日,国内支払日,現地基準日,銘柄コード,銘柄名,分配通貨,外国源泉税率（%）,1単位あたり金額,決済方法,数量,配当金等金額,外国源泉徴収税額,外国手数料,外国精算金額（外貨）,国内源泉徴収税額（外貨）,受取金額,申告レート基準日,申告レート,為替レート基準日,為替レート,配当金等金額（円）,外国源泉徴収税額（円）,国内課税所得額（円）,所得税（外貨）,地方税（外貨）,所得税（円）,地方税（円）,国内源泉徴収税額（外貨）")  # noqa E501
 
+    logger.info("処理開始")
     for root, _, files in os.walk(input_dir):
         for file_name in files:
+            _, ext = os.path.splitext(file_name)
             file_path = join(root, file_name)
-            print(file_path)
+
+            # 拡張子がpdfではない場合スキップ
+            if not ext.upper().endswith("PDF"):
+                logger.debug("ファイルスキップ： {}".format(file_path))
+                continue
+
+            logger.info("解析開始: {}".format(file_path))
 
             tables: TableList = camelot.read_pdf(
                 file_path, pages="all", line_scale=60,
                 layout_kwargs={'char_margin': 0.2, 'line_margin': 0.5, 'line_overlap': 0.5, 'word_margin': 0.1}
             )
 
-            pdf_type = judge_pdf_type(cast(Table, tables[0]))
-            if pdf_type == PdfType.JAPANESE_STOCK_DIVIDEND_REPORT:
-                for data in parse_japanese_stock_dividend_report(tables):
-                    data.insert(0, file_path)
-                    japanese_stock_dividend_list.append(",".join(data))
-            else:
-                for data in parse_global_stock_dividend_report(tables):
-                    data.insert(0, file_path)
-                    global_stock_dividend_list.append(",".join(data))
+            try:
+                pdf_type = judge_pdf_type(cast(Table, tables[0]))
+                if pdf_type == PdfType.JAPANESE_STOCK_DIVIDEND_REPORT:
+                    for data in parse_japanese_stock_dividend_report(tables):
+                        data.insert(0, file_path)
+                        japanese_stock_dividend_list.append(",".join(data))
+                else:
+                    for data in parse_global_stock_dividend_report(tables):
+                        data.insert(0, file_path)
+                        global_stock_dividend_list.append(",".join(data))
+            except Exception as e:
+                debug_tables(tables)
+                raise e
 
-    with codecs.open(join(output_dir, "japanese_stock_dividend.csv"), mode="w", encoding="cp932") as f:
-        for line in japanese_stock_dividend_list:
-            f.write(line)
-            f.write("\n")
+            logger.info("解析終了: {}".format(file_path))
 
-    with codecs.open(join(output_dir, "global_stock_dividend.csv"), mode="w", encoding="cp932") as f:
-        for line in global_stock_dividend_list:
-            f.write(line)
-            f.write("\n")
+    logger.info("japanese_stock_dividend.csv 作成開始")
+    list2csv(join(output_dir, "japanese_stock_dividend.csv"), japanese_stock_dividend_list)
+
+    logger.info("global_stock_dividend.csv 作成開始")
+    list2csv(join(output_dir, "global_stock_dividend.csv"), global_stock_dividend_list)
+
+    logger.info("処理終了")
 
 
 if __name__ == "__main__":
+    formatter = '%(asctime)s [%(levelname)s]: %(message)s'
+
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    stdout_handler.setFormatter(logging.Formatter(formatter))
+
+    logger.setLevel(logging.DEBUG)
+    logger.addHandler(stdout_handler)
+    # logging.basicConfig(level=logger.DEBUG, format=formatter)
+
     main()
