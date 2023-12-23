@@ -362,9 +362,9 @@ def parse_global_stock_dividend_report(text: str) -> Generator[List[str], None, 
         # 所得税（外貨）
         data.append(lines[48].replace(",", ""))
         # 地方税（外貨）
-        data.append(lines[49].replace(",", ""))
-        # 所得税（円）
         data.append(lines[51].replace(",", ""))
+        # 所得税（円）
+        data.append(lines[49].replace(",", ""))
         # 地方税（円）
         data.append(lines[52].replace(",", ""))
         # 国内源泉徴収税額（外貨）
