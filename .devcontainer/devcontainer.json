@@ -2,25 +2,30 @@
 	"name": "SBI PDF->Text",
 	"dockerComposeFile": "docker-compose.yml",
 	"service": "sbi_pdf2text",
-	"settings": {
-		"python.showStartPage": false,
-		"terminal.integrated.defaultProfile.linux": "bash",
-		"python.languageServer": "Pylance",
-		"workbench.editor.enablePreview": false,
-	},
 	"workspaceFolder": "/workspace",
-	"extensions": [
-		"ms-python.python",
-		"ms-python.vscode-pylance",
-		"njpwerner.autodocstring",
-		"gruntfuggly.todo-tree",
-		"shakram02.bash-beautify",
-		"donjayamanne.githistory",
-		"github.vscode-pull-request-github",
-		"formulahendry.code-runner",
-		"njqdev.vscode-python-typehint",
-		"ninoseki.vscode-pylens",
-	],
+	"customizations": {
+		"vscode": {
+			"settings": {
+				"python.showStartPage": false,
+				"terminal.integrated.defaultProfile.linux": "bash",
+				"python.languageServer": "Pylance",
+				"workbench.editor.enablePreview": false
+			},
+			"extensions": [
+				"ms-python.python",
+				"ms-python.vscode-pylance",
+				"njpwerner.autodocstring",
+				"gruntfuggly.todo-tree",
+				"shakram02.bash-beautify",
+				"donjayamanne.githistory",
+				"github.vscode-pull-request-github",
+				"formulahendry.code-runner",
+				"njqdev.vscode-python-typehint",
+				"ninoseki.vscode-pylens",
+				"ms-toolsai.jupyter"
+			]
+		}
+	},
 	"remoteUser": "vscode",
 	"postCreateCommand": "bash /workspace/.devcontainer/init.sh"
 }
