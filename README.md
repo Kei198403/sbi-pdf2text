@@ -4,9 +4,7 @@
 ## 実行環境
 VSCode + Remote Containers + Docker
 
-Python3.9
-
-※2022年4月時点でPython3.10ではcamelotのインストールができませんでした。
+Python3.12
 
 ## Poetryのvirtualenvに入る
 VSCodeのTerminalを開くと自動でvirtualenvに入りますが、入らない場合は、以下を実行。
@@ -20,11 +18,21 @@ source /workspace/.venv/bin/activate
 ## pdf解析パッケージ
 
 ```
-poetry add "camelot-py[base]"
+poetry add pypdf"
 ```
 
-- [Camelot: PDF Table Extraction for Humans](https://camelot-py.readthedocs.io/en/master/)
-- [Pythonを使えばテキストを含むPDFの解析は簡単だ・・・そんなふうに考えていた時期が俺にもありました](https://qiita.com/mima_ita/items/d99afc28b6f51479f850)
+- [pypdf · PyPI](https://pypi.org/project/pypdf/)
+- [【Python×PDF】PyPDF2はもう古い！PythonでPDFを扱うときにはpypdfを使おう #Python - Qiita](https://qiita.com/ryutarom128/items/6e5d36efb136f9595f07)
+
+## mojimojiライブラリのPython3.12対応
+
+2023年12月時点でmojimoji 0.0.12はpython3.12に未対応。  
+[pull request](https://github.com/studio-ousia/mojimoji/pull/25)が出ているが取り込まれていない状況だった。  
+そのためforkされているリポジトリの中からpull requestを取り込んだブランチがあったためそのソースを利用。
+
+```bash
+poetry add git+https://github.com/tpdn/mojimoji.git#fix_for_py312
+```
 
 ## GitコミットのPrefixルール
 
