@@ -201,7 +201,7 @@ def parse_japanese_stock_dividend_report(text: str) -> Generator[List[str], None
             adjust_lines(lines, stock2_start)
             yield parse_data(lines[stock2_start:stock2_start+14])
             # 次のページの開始位置を設定
-            next_start_index = stock2_start + 1
+            next_start_index = stock2_start + 25
         else:
             # 銘柄2がない場合は最終ページのため終了
             break
