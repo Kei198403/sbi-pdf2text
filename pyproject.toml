@@ -7,7 +7,7 @@ authors = ["Kei198403@gmail.com"]
 [tool.poetry.dependencies]
 python = "^3.12"
 mojimoji = {git = "https://github.com/tpdn/mojimoji.git", rev = "fix_for_py312"}
-pypdf = "^3.17.3"
+pdfminer-six = "^20221105"
 
 [tool.poetry.dev-dependencies]
 flake8 = "^6.1.0"

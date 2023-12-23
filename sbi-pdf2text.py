@@ -3,17 +3,16 @@
 
 import sys
 import os
-import camelot
 import re
 import codecs
 import logging
 
-from os.path import join
-from typing import Final, List, cast, Generator
+from os.path import join, exists
+from typing import Final, List, cast, Generator, Tuple
 
-from camelot.core import TableList, Table
-from pandas import DataFrame
 from enum import Enum
+
+from pdfminer.high_level import extract_text
 from mojimoji import zen_to_han
 
 input_dir: Final[str] = "./input"
@@ -30,20 +29,20 @@ class PdfType(Enum):
     GLOBAL_STOCK_DIVIDEND_REPORT = 2
 
 
-def judge_pdf_type(table: Table) -> PdfType:
-    df = cast(DataFrame, table.df)
+def judge_pdf_type(text: str) -> PdfType:
 
-    if re_date_format.match(cast(str, df.loc[1][0]).strip()):
+    # 「TWCODE:」で始まっている場合は「外国株式等配当金等のご案内（兼）支払通知書」電子交付のお知らせ と判断
+    if text.lstrip().startswith("TWCODE:"):
         return PdfType.GLOBAL_STOCK_DIVIDEND_REPORT
 
-    for i in df.index:
-        if "特定口座配当等受入対象" in df.loc[i][2]:
+    for line in text.splitlines():
+        if "株式等配当金のお知らせ" in line:
             return PdfType.JAPANESE_STOCK_DIVIDEND_REPORT
 
     raise NotImplementedError()
 
 
-def parse_japanese_stock_dividend_report(tables: TableList) -> Generator[List[str], None, None]:
+def parse_japanese_stock_dividend_report(text: str) -> Generator[List[str], None, None]:
     """『「株式等利益剰余金配当金のお知らせ」電子交付のお知らせ』PDFを解析して、情報を抽出。
 
     ・銘柄名： df.loc[3][0] または df.loc[8][0]。情報がない場合は、「以下余白」が入る。
@@ -57,153 +56,340 @@ def parse_japanese_stock_dividend_report(tables: TableList) -> Generator[List[st
     ・お受取金額（円）： df.loc[5][12] または df.loc[10][12]。全角文字列。
 
     Args:
-        tables (TableList): camelot.read_pdfの返却値
+        text: pdfminerのextract_textの返却値
     """
-    for i in range(tables.n):
-        table: Table = tables[i]
-        df = cast(DataFrame, table.df)
 
-        if len(df.columns) < 10:
-            continue
+    def search_start_index(lines: List[str], start_pos: int = 0) -> Tuple[int, int]:
+        """銘柄の開始位置を検索
 
-        base_position = (3, 8)
-        for pos in base_position:
-            x_shift = 0
+        - 1ページ内には最大で2銘柄が記載される。
+        - 
 
-            # 先頭列が空白になってしまっている場合の対策
-            for _ in range(len(df.loc[pos])):
-                if len(df.loc[pos][0 + x_shift].strip()) == 0:
-                    x_shift += 1
-                else:
-                    break
-            else:
-                # すべて空白の場合
-                raise ValueError("データ不正 table[{}]".format(i))
+        Args:
+            lines: pdfminerのextract_textの返却値
+            start_pos: 検索開始位置
 
-            logger.info("国内配当pdf解析： x_shift: %d", x_shift)
+        Returns:
+            Tuple[銘柄1の開始位置, 銘柄2の開始位置]
 
-            # 「以下余白」が含まれている場合はスキップ x_shift対象
-            if "以下余白" in df.loc[pos][0+x_shift]:
-                continue
+            銘柄がない場合は、開始位置は-1となる。
+        """
+        stock1_start = -1
+        stock2_start = -1
 
-            # 改行区切りになっている銘柄名と銘柄コードを分割
-            corporation = cast(str, df.loc[pos][0+x_shift]).split("\n")
+        for i in range(start_pos, len(lines)):
+            line = lines[i]
 
-            logger.info(f"国内配当pdf解析： corporation: {corporation}")
+            if "株式等配当金のお知らせ" in line:
+                # [銘柄1] 4行前に銘柄名の記載がある
+                stock1_start = i - 4
 
-            data = list()
-            # 銘柄名 x_shift対象
-            data.append(corporation[0].strip())
-            # 銘柄コード x_shift対象
-            data.append(zen_to_han(corporation[1].strip().replace("　", "").replace("（", "").replace("）", "").replace("\u3000", "")))
+                # 銘柄と銘柄コードの間に空行がない場合の対応
+                # 空行の追加は別途行うがここでは開始位置を調整する。
+                if lines[i - 3] != "":
+                    stock1_start = i - 3
+
+                # [銘柄2] 19行後に銘柄名の記載がある
+                stock2_start = i + 19
+            
+            # 「以下余白」が含まれている場合は銘柄2の開始位置を-1にする
+            if "以下余白" in line:
+                stock2_start = -1
+
+            if "端数処理代金につきまして" in line or "（取引店）" in line:
+                break
+
+        return (stock1_start, stock2_start)
+
+
+    def parse_data(lines: List[str]) -> List[str]:
+        """文字文字列配列を解析して、対象銘柄の配当金情報を抽出
+
+        1銘柄目と2銘柄目でデータ構造が異なるが、呼び出し元で同じ構造にして呼び出す前提とする。
+        全角数字は半角数字に変換する。
+
+        サンプルデータ(14行の配列データ)
+        ```
+        0: 三菱商事
+        1: 
+        2: （８０５８　　）
+        3: 
+        4: ２０２３年１２月　１日 　　　　１０５．０００００００ 　　　　　　　　　　　　　　４
+        5: 
+        6: 　　　　　　　　　　　　４２０ 　　　　　　　　　　　６４ 　　　　　　　　　　　２１
+        7: 
+        8: 　　　　　　　　　　　　０ 　　　　　　　　　　　　３３５
+        9: 
+        10: 特定口座配当等受入対象
+        11: 
+        12: ２０２３年　９月３０日
+        13: 
+        ```
+
+        Args:
+            lines (List[str]): 銘柄の文字列配列。詳細イメージは上記のサンプルデータを参照。
+
+        Returns:
+            List[str]: _description_
+        """
+        assert len(lines) == 14
+
+        data: List[str] = []
+
+        line5 = lines[4].split(" ")
+        line7 = lines[6].split(" ")
+        line9 = lines[8].split(" ")
+
+        try:
+            # 銘柄名
+            data.append(lines[0].strip())
+            # 銘柄コード
+            data.append(zen_to_han(lines[2].strip().replace("　", "").replace("（", "").replace("）", "").replace("\u3000", "")))
             # お支払日
-            data.append(zen_to_han(df.loc[pos][4].replace("　", "")))
+            data.append(zen_to_han(line5[0].replace("　", "")))
             # 配当単価（円）
-            data.append(zen_to_han(df.loc[pos][8]))
+            data.append(zen_to_han(line5[1].replace("　", "")).replace(",", ""))
             # 数量（株数・口数）
-            data.append(zen_to_han(df.loc[pos][12].replace("，", "")))
+            data.append(zen_to_han(line5[2].replace("　", "")).replace(",", ""))
             # 配当金額（税引前）
-            data.append(zen_to_han(df.loc[pos+2][0].replace("，", "")))
+            data.append(zen_to_han(line7[0].replace("　", "")).replace(",", "")) 
             # 所得税（円）
-            data.append(zen_to_han(df.loc[pos+2][2].replace("，", "")))
+            data.append(zen_to_han(line7[1].replace("　", "")).replace(",", ""))
             # 地方税（円）
-            data.append(zen_to_han(df.loc[pos+2][3].replace("，", "")))
+            data.append(zen_to_han(line7[2].replace("　", "")).replace(",", ""))
             # 端数処理代金（円）
-            data.append(zen_to_han(df.loc[pos+2][8].replace("，", "")))
+            data.append(zen_to_han(line9[0].replace("　", "")).replace(",", ""))
             # お受取金額（円）
-            data.append(zen_to_han(df.loc[pos+2][12].replace("，", "")))
+            data.append(zen_to_han(line9[1].replace("　", "")).replace(",", ""))
+        except Exception as e:
+            logger.error(f"データ解析エラー: {repr(lines)}")
+            raise e
 
-            yield data
+        return data
+
+    def adjust_lines(lines: List[str], start_index: int) -> int:
+        add_line_num = 0
+
+        # 1行目と2行目の間に空行がない場合、空行を追加する
+        # データ的には空行が入らない方が少ない。
+        if lines[start_index + 1] != "":
+            lines.insert(start_index + 1, "")
+            add_line_num += 1
+
+        return add_line_num
 
 
-def parse_global_stock_dividend_report(tables: TableList) -> Generator[List[str], None, None]:
+    lines = text.splitlines()
+
+    next_start_index = 0
+    while True:
+        (stock1_start, stock2_start) = search_start_index(lines, next_start_index)
+
+        if stock1_start != -1:
+            stock2_start += adjust_lines(lines, stock1_start)
+            # 5行目から13行目までの情報を除外。4行+10行=14行のデータをparse_dataに渡す（銘柄2と同じ構造）
+            yield parse_data(lines[stock1_start:stock1_start+4] + lines[stock1_start+13:stock1_start+23])
+        else:
+            # 銘柄1がない場合は終了
+            break
+
+        if stock2_start != -1:
+            adjust_lines(lines, stock2_start)
+            yield parse_data(lines[stock2_start:stock2_start+14])
+            # 次のページの開始位置を設定
+            next_start_index = stock2_start + 1
+        else:
+            # 銘柄2がない場合は最終ページのため終了
+            break
+
+
+def parse_global_stock_dividend_report(text: str) -> Generator[List[str], None, None]:
     """『「外国株式等配当金等のご案内（兼）支払通知書」電子交付のお知らせ』PDFを解析して、情報を抽出。
 
-    pdfの構成：
-      1銘柄に対して、tableが2つ。
-
-    tables[n+0].df
-      縦：0～6、横：0～14のDataFrameオブジェクト
-    tables[n+1].df
-      縦：0～3、横：0～8のDataFrameオブジェクト
-
-    Args:
-        tables (TableList): _description_
+        Args:
+          text: pdfminerのextract_textの返却値
     """
-    for i in range(tables.n//2):
-        table1: Table = tables[i*2 + 0]
-        table2: Table = tables[i*2 + 1]
-        df1 = cast(DataFrame, table1.df)
-        df2 = cast(DataFrame, table2.df)
 
-        data: List[str] = list()
+    def search_start_index(lines: List[str], start_pos: int = 0) -> int:
+        for i in range(start_pos, len(lines)):
+            line = lines[i]
+
+            # 上から探してYYYY/MM/DDの形式で日付が記載されている最初の行を検索
+            if re_date_format.match(line):
+                return i
+
+        return -1
+
+    def adjust_lines(lines: List[str], start_index: int) -> int:
+        add_line_num = 0
+        index = start_index
+
+        # 必要に応じて処理を実装
+        for i in range(start_index, start_index + 56):
+            line = lines[i]
+
+            if "gT" == line:
+                if lines[i+1] == "":
+                    del lines[i+1]
+                del lines[i]
+
+        return add_line_num
+    
+    def parse_data(lines: List[str]) -> List[str]:
+        """_summary_
+
+        サンプルデータ(56行の配列データ)
+        ```
+        0: 2023/03/29
+        1: 
+        2: 2023/03/30
+        3: 
+        4: 2023/03/24
+        5: 
+        6: 304-HDV
+        7: 
+        8: i | ETF
+        9: 
+        10: %
+        11: 
+        12: 1
+        13: 
+        14: 10.0
+        15: 
+        16: 1.042139
+        17: 
+        18: 115
+        19: 
+        20: 119.85
+        21: 
+        22: 11.98
+        23: 
+        24: 0.00
+        25: 
+        26: 107.87
+        27: 
+        28: 21.52
+        29: 
+        30: 0.00
+        31: 
+        32: 0.00
+        33: 
+        34: 86.35
+        35: 
+        36: 2023/03/29
+        37: 2023/03/30
+        38: 
+        39: 130.2800
+        40: 132.5500
+        41: 
+        42: 15,614
+        43: 
+        44: 1,560
+        45: 
+        46: 14,054
+        47: 
+        48: 16.23
+        49: 2,152
+        50: 
+        51: 5.29
+        52: 702
+        53: 
+        54: 21.52
+        55: 
+        ```
+
+        Args:
+            lines (List[str]): _description_
+
+        Returns:
+            List[str]: _description_
+        """
+        assert len(lines) == 56
+
+        data: List[str] = []
+
+        # 空行をチェック
+        for i in list(range(1, 36, 2)) + [38, 41, 43, 45, 47, 50, 53]:
+            if lines[i] != "":
+                raise ValueError(f"空行チェックエラー: {repr(lines)}")
 
         # 配当金等支払日
-        data.append(df1.loc[1][0])
+        data.append(lines[0])
         # 国内支払日
-        data.append(df1.loc[1][1])
+        data.append(lines[2])
         # 現地基準日
-        data.append(df1.loc[1][2])
+        data.append(lines[4])
         # 銘柄コード
-        data.append(df1.loc[1][4])
-        # 銘柄名
-        data.append(df1.loc[1][7])
-        # 分配通貨
-        data.append(df1.loc[3][0])
+        data.append(lines[6])
+        # 銘柄名 ※日本語はうまく取得できない。
+        data.append(lines[8])
+        # 分配通貨 ※うまく取得できないので、固定値を設定
+        data.append("※未取得※")
         # 外国源泉税率（%）
-        data.append(df1.loc[3][1])
+        data.append(lines[14])
         # 1単位あたり金額
-        data.append(df1.loc[3][2])
-        # 決済方法
-        data.append(df1.loc[3][4])
+        data.append(lines[16])
+        # 決済方法 ※うまく取得できないので、固定値を設定
+        data.append("※未取得※")
         # 数量
-        data.append(df1.loc[5][0])
+        data.append(lines[18].replace(",", ""))
         # 配当金等金額
-        data.append(df1.loc[5][1])
+        data.append(lines[20].replace(",", ""))
         # 外国源泉徴収税額
-        data.append(df1.loc[5][2])
+        data.append(lines[22].replace(",", ""))
         # 外国手数料
-        data.append(df1.loc[6][3])
+        data.append(lines[24].replace(",", ""))
         # 外国精算金額（外貨）
-        data.append(df1.loc[5][5])
+        data.append(lines[26].replace(",", ""))
         # 国内源泉徴収税額（外貨）
-        data.append(df1.loc[5][8])
+        data.append(lines[28].replace(",", ""))
         # 受取金額
-        data.append(df1.loc[5][12])
+        data.append(lines[34].replace(",", ""))
         # 申告レート基準日
-        data.append(df2.loc[2][0])
+        data.append(lines[36])
         # 申告レート
-        data.append(df2.loc[2][1])
+        data.append(lines[39].replace(",", ""))
         # 為替レート基準日
-        data.append(df2.loc[3][0])
+        data.append(lines[37])
         # 為替レート
-        data.append(df2.loc[3][1])
+        data.append(lines[40].replace(",", ""))
         # 配当金等金額（円）
-        data.append(df2.loc[2][2].replace(",", ""))
+        data.append(lines[42].replace(",", ""))
         # 外国源泉徴収税額（円）
-        data.append(df2.loc[2][3].replace(",", ""))
+        data.append(lines[44].replace(",", ""))
         # 国内課税所得額（円）
-        data.append(df2.loc[2][4].replace(",", ""))
+        data.append(lines[46].replace(",", ""))
         # 所得税（外貨）
-        data.append(df2.loc[2][5])
+        data.append(lines[48].replace(",", ""))
         # 地方税（外貨）
-        data.append(df2.loc[2][7])
+        data.append(lines[49].replace(",", ""))
         # 所得税（円）
-        data.append(df2.loc[3][6].replace(",", ""))
+        data.append(lines[51].replace(",", ""))
         # 地方税（円）
-        data.append(df2.loc[3][7].replace(",", ""))
+        data.append(lines[52].replace(",", ""))
         # 国内源泉徴収税額（外貨）
-        data.append(df2.loc[2][8])
+        data.append(lines[54].replace(",", ""))
 
-        yield data
+        return data
 
 
-def debug_tables(tables: TableList) -> None:
-    for i in range(tables.n):
-        table: Table = tables[i]
-        df = cast(DataFrame, table.df)
-        logger.info("table[{}]".format(i))
-        df.to_csv(sys.stdout)
+    lines = text.splitlines()
+
+    next_start_index = 0
+    while True:
+        start_index = search_start_index(lines, next_start_index)
+
+        # 開始位置が見つからない場合は終了
+        if start_index == -1:
+            break
+
+        # 対象リストデータを必要に応じて整形
+        adjust_lines(lines, start_index)
+        # データを抽出
+        yield parse_data(lines[start_index:start_index+56])
+
+        # 次の銘柄の開始位置は基本的には56行後ろだが、少し前から探索する
+        next_start_index = start_index + 56 - 5
 
 
 def list2csv(csv_path: str, data_list: List[str], encoding: str = "cp932") -> None:
@@ -211,6 +397,17 @@ def list2csv(csv_path: str, data_list: List[str], encoding: str = "cp932") -> No
         for line in data_list:
             f.write(line)
             f.write("\n")
+
+
+def read_rdf(file_path: str) -> str:
+    txt_file_path = file_path + ".txt"
+    if exists(txt_file_path):
+        logger.debug(f"テキストファイル読み込み： {txt_file_path}")
+        with open(txt_file_path, mode="r", encoding="utf-8") as f:
+            return f.read()
+    else:
+        logger.debug(f"PDFファイル読み込み： {file_path}")
+        return extract_text(file_path)
 
 
 def main() -> None:
@@ -227,33 +424,40 @@ def main() -> None:
             _, ext = os.path.splitext(file_name)
             file_path = join(root, file_name)
 
-            # 拡張子がpdfではない場合スキップ
-            if not ext.upper().endswith("PDF"):
-                logger.debug("ファイルスキップ： {}".format(file_path))
+            if file_name.upper().endswith(".PDF.TXT"):
                 continue
 
-            logger.info("解析開始: {}".format(file_path))
+            # 拡張子がpdfではない場合スキップ
+            if not ext.upper().endswith("PDF"):
+                logger.debug(f"ファイルスキップ： {file_path}")
+                continue
 
-            tables: TableList = camelot.read_pdf(
-                file_path, pages="all", line_scale=60,
-                layout_kwargs={'char_margin': 0.2, 'line_margin': 0.5, 'line_overlap': 0.5, 'word_margin': 0.1}
-            )
+            logger.info(f"解析開始: {file_path}")
+
+            # PDFをテキストに変換。
+            # file_path + ".txt"のファイルが存在する場合は、そちらを読み込む。
+            # 読み込みに失敗した場合は、file_path + ".txt"にテキストを出力するため、手修正して再度実行する。
+            text = read_rdf(file_path)
 
             try:
-                pdf_type = judge_pdf_type(cast(Table, tables[0]))
+                pdf_type = judge_pdf_type(text)
+
+                logger.debug(f"PDFタイプ： {pdf_type}")
                 if pdf_type == PdfType.JAPANESE_STOCK_DIVIDEND_REPORT:
-                    for data in parse_japanese_stock_dividend_report(tables):
+                    for data in parse_japanese_stock_dividend_report(text):
                         data.insert(0, file_path)
                         japanese_stock_dividend_list.append(",".join(data))
                 else:
-                    for data in parse_global_stock_dividend_report(tables):
+                    for data in parse_global_stock_dividend_report(text):
                         data.insert(0, file_path)
                         global_stock_dividend_list.append(",".join(data))
             except Exception as e:
-                debug_tables(tables)
+                logger.error(f"解析エラー: {file_path}")
+                with open(file_path + ".txt", mode="w", encoding="utf-8") as f:
+                    f.write(text)
                 raise e
 
-            logger.info("解析終了: {}".format(file_path))
+            logger.info(f"解析終了: {file_path}")
 
     logger.info("japanese_stock_dividend.csv 作成開始")
     list2csv(join(output_dir, "japanese_stock_dividend.csv"), japanese_stock_dividend_list)
