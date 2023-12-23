@@ -26,14 +26,18 @@ class PdfType(Enum):
     # 「株式等利益剰余金配当金のお知らせ」電子交付のお知らせ
     JAPANESE_STOCK_DIVIDEND_REPORT = 1
     # 「外国株式等配当金等のご案内（兼）支払通知書」電子交付のお知らせ
-    GLOBAL_STOCK_DIVIDEND_REPORT = 2
+    GLOBAL_STOCK_DIVIDEND_REPORT_VER1 = 2   
+    GLOBAL_STOCK_DIVIDEND_REPORT_VER2 = 3   # 2021年4月8日あたりからのフォーマット
 
 
 def judge_pdf_type(text: str) -> PdfType:
 
     # 「TWCODE:」で始まっている場合は「外国株式等配当金等のご案内（兼）支払通知書」電子交付のお知らせ と判断
     if text.lstrip().startswith("TWCODE:"):
-        return PdfType.GLOBAL_STOCK_DIVIDEND_REPORT
+        for line in text.splitlines():
+            if "外国株式等　配当金等のご案内" in line:
+                return PdfType.GLOBAL_STOCK_DIVIDEND_REPORT_VER1
+        return PdfType.GLOBAL_STOCK_DIVIDEND_REPORT_VER2
 
     for line in text.splitlines():
         if "株式等配当金のお知らせ" in line:
@@ -203,7 +207,7 @@ def parse_japanese_stock_dividend_report(text: str) -> Generator[List[str], None
             break
 
 
-def parse_global_stock_dividend_report(text: str) -> Generator[List[str], None, None]:
+def parse_global_stock_dividend_report(text: str, pdf_type: PdfType) -> Generator[List[str], None, None]:
     """『「外国株式等配当金等のご案内（兼）支払通知書」電子交付のお知らせ』PDFを解析して、情報を抽出。
 
         Args:
@@ -212,7 +216,7 @@ def parse_global_stock_dividend_report(text: str) -> Generator[List[str], None, 
 
     def search_start_index(lines: List[str], start_pos: int = 0) -> int:
         for i in range(start_pos, len(lines)):
-            line = lines[i]
+            line = lines[i].strip()
 
             # 上から探してYYYY/MM/DDの形式で日付が記載されている最初の行を検索
             if re_date_format.match(line):
@@ -235,7 +239,207 @@ def parse_global_stock_dividend_report(text: str) -> Generator[List[str], None, 
 
         return add_line_num
     
-    def parse_data(lines: List[str]) -> List[str]:
+    def parse_data_ver1(lines: List[str]) -> List[str]:
+        """
+
+        サンプルデータ
+        ```
+        0: 2019/08/08
+        1: 
+        2: 現地基準日
+        3: 2019/08/02
+        4: 
+        5: 2019/08/07
+        6: 分配通貨
+        7: 米国ドル
+        8: 
+        9: 外国源泉税率（%） 1単位あたり金額
+        10: 
+        11:           10.0            0.367189
+        12: 
+        13: 銘柄コード
+        14: 304-HYG
+        15: 決済方法
+        16: 外貨決済
+        17: 
+        18: iシェアーズ iBoxx USD Hイールド社債 ETF
+        19: 円貨決済用レート
+        20: 
+        21: 口座区分
+        22: 
+        23: 勘定設定年
+        24: 
+        25: 備考
+        26: 
+        27: 銘　柄　名
+        28: 
+        29: 数量
+        30: 
+        31: 配当金等金額
+        32: 
+        33: 外国源泉
+        34: 徴収税額
+        35: 
+        36: 外国手数料
+        37: 
+        38: 外国精算金額
+        39: 
+        40: 国内源泉
+        41: 徴収税額
+        42: 
+        43: 国内手数料
+        44: 
+        45: 消費税
+        46: 
+        47: 受取金額
+        48: 
+        49:             28
+        50: 
+        51:                  10.28
+        52: 
+        53:                   1.02
+        54: 
+        55:                   0.00
+        56: 
+        57:                   9.26
+        58: 外貨
+        59: 円貨                 
+        60: 
+        61:                    1.85             0.00
+        62: 
+        63:                   0.00
+        64: 
+        65:                   7.41
+        66: 
+        67: （国内源泉徴収税の明細）
+        68: 
+        69: 申告レート基準日
+        70: 
+        71: 為替レート基準日
+        72: 2019/08/07
+        73: 2019/08/08
+        74: 
+        75: 申告レート
+        76: 為替レート
+        77:     105.1700
+        78:     106.1100
+        79: 
+        80: 配当金等金額（円）
+        81: 
+        82: 外国源泉
+        83: 徴収税額（円）
+        84: 
+        85: 国内課税所得額（円）
+        86: 
+        87: 所得税
+        88: 
+        89: 地方税
+        90: 
+        91: 国内源泉
+        92: 徴収税額
+        93: 
+        94:                  1,081
+        95: 
+        96:                    107
+        97: 
+        98:               974
+        99: 
+        100: 外貨
+        101:                   1.40
+        102: 円貨              149
+        103: 
+        104:                   0.45
+        105: 
+        106:                    1.85
+        107:                48                  
+        108: 
+        109:         ＊＊　 以　　上 　＊＊
+        110: 
+        111: お客様のお受取金額                  7.41米国ドル
+        ```
+
+        """
+        assert len(lines) == 112
+
+        data: List[str] = []
+
+        for i, line in enumerate(lines):
+            lines[i] = line.strip()
+
+        # 空行をチェック
+        for i in [1, 4, 8, 10, 12, 17, 20, 22, 24, 26, 28, 60, 74, 93, 95, 99, 103, 105]:
+            if lines[i] != "":
+                raise ValueError(f"空行チェックエラー: {i}番目の行に空行がありません。 data={repr(lines)}")
+        
+        # 数値チェック
+        for i in [101]:
+            if not re.match(r"\d+\.*\d*", lines[i]):
+                raise ValueError(f"数値チェックエラー: {i}番目の行に数値がありません。 data={repr(lines)}")
+        
+        line12 = re.sub(r"\s+", " ", lines[11]).split(" ")
+        line62 = re.sub(r"\s+", " ", lines[61]).split(" ")
+        line103 = re.sub(r"\s+", " ", lines[102]).split(" ")
+
+        # 配当金等支払日
+        data.append(lines[5])
+        # 国内支払日
+        data.append(lines[0])
+        # 現地基準日
+        data.append(lines[3])
+        # 銘柄コード
+        data.append(lines[14])
+        # 銘柄名
+        data.append(lines[18])
+        # 分配通貨
+        data.append("※未取得※")
+        # 外国源泉税率（%）
+        data.append(line12[0])
+        # 1単位あたり金額
+        data.append(line12[1])
+        # 決済方法
+        data.append("※未取得※")
+        # 数量
+        data.append(lines[49].replace(",", ""))
+        # 配当金等金額
+        data.append(lines[51].replace(",", ""))
+        # 外国源泉徴収税額
+        data.append(lines[53].replace(",", ""))
+        # 外国手数料
+        data.append(lines[55].replace(",", ""))
+        # 外国精算金額（外貨）
+        data.append(lines[57].replace(",", ""))
+        # 国内源泉徴収税額（外貨）
+        data.append(line62[0].replace(",", ""))
+        # 受取金額
+        data.append(lines[65].replace(",", ""))
+        # 申告レート基準日
+        data.append(lines[72])
+        # 申告レート
+        data.append(lines[77].replace(",", ""))
+        # 為替レート基準日
+        data.append(lines[73])
+        # 為替レート
+        data.append(lines[78].replace(",", ""))
+        # 配当金等金額（円）
+        data.append(lines[94].replace(",", ""))
+        # 外国源泉徴収税額（円）
+        data.append(lines[96].replace(",", ""))
+        # 国内課税所得額（円）
+        data.append(lines[98].replace(",", ""))
+        # 所得税（外貨）
+        data.append(lines[101].replace(",", ""))
+        # 地方税（外貨）
+        data.append(lines[104].replace(",", ""))
+        # 所得税（円）
+        data.append(line103[1].replace(",", ""))
+        # 地方税（円）
+        data.append(lines[107].replace(",", ""))
+        # 国内源泉徴収税額（外貨）
+        data.append(lines[106].replace(",", ""))
+
+        return data
+
+    def parse_data_ver2(lines: List[str]) -> List[str]:
         """_summary_
 
         サンプルデータ(56行の配列データ)
@@ -308,10 +512,13 @@ def parse_global_stock_dividend_report(text: str) -> Generator[List[str], None, 
 
         data: List[str] = []
 
+        for i, line in enumerate(lines):
+            lines[i] = line.strip()
+
         # 空行をチェック
         for i in list(range(1, 36, 2)) + [38, 41, 43, 45, 47, 50, 53]:
             if lines[i] != "":
-                raise ValueError(f"空行チェックエラー: {repr(lines)}")
+                raise ValueError(f"空行チェックエラー: {i}番目の行に空行がありません。 data={repr(lines)}")
 
         # 配当金等支払日
         data.append(lines[0])
@@ -376,6 +583,7 @@ def parse_global_stock_dividend_report(text: str) -> Generator[List[str], None, 
     lines = text.splitlines()
 
     next_start_index = 0
+    data_length = 56 if pdf_type == PdfType.GLOBAL_STOCK_DIVIDEND_REPORT_VER2 else 112
     while True:
         start_index = search_start_index(lines, next_start_index)
 
@@ -383,13 +591,18 @@ def parse_global_stock_dividend_report(text: str) -> Generator[List[str], None, 
         if start_index == -1:
             break
 
-        # 対象リストデータを必要に応じて整形
-        adjust_lines(lines, start_index)
-        # データを抽出
-        yield parse_data(lines[start_index:start_index+56])
-
-        # 次の銘柄の開始位置は基本的には56行後ろだが、少し前から探索する
-        next_start_index = start_index + 56 - 5
+        if pdf_type == PdfType.GLOBAL_STOCK_DIVIDEND_REPORT_VER1:
+            yield parse_data_ver1(lines[start_index:start_index+data_length])
+        elif pdf_type == PdfType.GLOBAL_STOCK_DIVIDEND_REPORT_VER2:
+            # 対象リストデータを必要に応じて整形
+            adjust_lines(lines, start_index)
+            # データを抽出
+            yield parse_data_ver2(lines[start_index:start_index+data_length])
+        else:
+            raise NotImplementedError()
+        
+        # 次の銘柄の開始位置は基本的にはdata_length行後ろだが、少し前から探索する
+        next_start_index = start_index + data_length - 5
 
 
 def list2csv(csv_path: str, data_list: List[str], encoding: str = "cp932") -> None:
@@ -448,7 +661,7 @@ def main() -> None:
                         data.insert(0, file_path)
                         japanese_stock_dividend_list.append(",".join(data))
                 else:
-                    for data in parse_global_stock_dividend_report(text):
+                    for data in parse_global_stock_dividend_report(text, pdf_type):
                         data.insert(0, file_path)
                         global_stock_dividend_list.append(",".join(data))
             except Exception as e:
