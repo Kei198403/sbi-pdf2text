@@ -135,5 +135,5 @@ dmypy.json
 .netrc
 
 # input, output directory
-input
-output
+input*
+output*
