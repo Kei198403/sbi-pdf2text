@@ -39,16 +39,6 @@ poetry add pdfminer.six
 
 
 
-## mojimojiライブラリのPython3.12対応
-
-2023年12月時点でmojimoji 0.0.12はpython3.12に未対応。  
-2023年10月に[pull request](https://github.com/studio-ousia/mojimoji/pull/25)が出ているが取り込まれていない状況。  
-そのためforkされているリポジトリの中からpull requestを取り込んだブランチがあったためそのソースを利用。
-
-```bash
-poetry add git+https://github.com/tpdn/mojimoji.git#fix_for_py312
-```
-
 ## GitコミットのPrefixルール
 
 - feat: 新しい機能

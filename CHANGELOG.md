@@ -1,3 +1,9 @@
+# v2.3 - 2024/12/01
+
+# 変更点
+- 利用しているライブラリを最新化
+  - mojimojiも[pull request](https://github.com/studio-ousia/mojimoji/pull/25)が取り込まれていたので0.0.13に変更
+
 # v2.2 - 2023/12/24
 
 # 不具合修正
