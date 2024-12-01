@@ -167,6 +167,8 @@ def parse_japanese_stock_dividend_report(text: str) -> Generator[List[str], None
             data.append(zen_to_han(line9[1].replace("　", "")).replace(",", ""))
         except Exception as e:
             logger.error(f"データ解析エラー: {repr(lines)}")
+            for index, line in enumerate(lines):
+                logger.info(f"[{index}]: 『{line}』")
             raise e
 
         return data
