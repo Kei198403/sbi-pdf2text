@@ -202,7 +202,9 @@ def parse_japanese_stock_dividend_report(text: str) -> Generator[List[str], None
 
         return add_line_num
 
-
+    # U+000C(\f) Form feedを半角スペースに置換
+    # text.splitlines()で\fも改行として扱われ、実際のテキストファイルの行数とずれるため除去
+    text = text.replace("\f", " ")
     lines = text.splitlines()
 
     total_page = count_page(lines)
