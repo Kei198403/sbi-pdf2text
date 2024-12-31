@@ -216,6 +216,7 @@ def parse_japanese_stock_dividend_report(text: str) -> Generator[List[str], None
 
         if stock1_start != -1:
             stock2_start += adjust_lines(lines, stock1_start)
+            logger.debug(f"銘柄1の開始行番号: {stock1_start+1}, 先頭行: {lines[stock1_start]}")
             # 5行目から13行目までの情報を除外。4行+10行=14行のデータをparse_dataに渡す（銘柄2と同じ構造）
             yield parse_data(lines[stock1_start:stock1_start+4] + lines[stock1_start+13:stock1_start+23])
 
@@ -226,6 +227,7 @@ def parse_japanese_stock_dividend_report(text: str) -> Generator[List[str], None
 
         if stock2_start != -1:
             adjust_lines(lines, stock2_start)
+            logger.debug(f"銘柄2の開始行番号: {stock2_start+1}, 先頭行: {lines[stock2_start]}")
             yield parse_data(lines[stock2_start:stock2_start+14])
             # 次のページの開始位置を設定
             next_start_index = stock2_start + 25
