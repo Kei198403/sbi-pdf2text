@@ -6,11 +6,12 @@ import os
 import re
 import codecs
 import logging
+import argparse
 
 from os.path import join, exists
 from typing import Final, List, cast, Generator, Tuple
-
 from enum import Enum
+from dataclasses import dataclass
 
 from pdfminer.high_level import extract_text
 from mojimoji import zen_to_han
@@ -624,8 +625,27 @@ def read_rdf(file_path: str) -> str:
         logger.debug(f"PDFファイル読み込み： {file_path}")
         return extract_text(file_path)
 
+@dataclass
+class Arguments:
+    input: str | None
+    force_save_text: bool
 
-def main() -> None:
+
+def parse_arguments() -> Arguments:
+    parser = argparse.ArgumentParser(description="PDF解析ツール")
+    parser.add_argument("-i", "--input", type=str, default=None, help="解析対象のPDFファイルパス。未指定の場合は、対象ディレクトリを再帰的に解析")
+    parser.add_argument("-f", "--force-save-text", default=False, action="store_true", help="解析結果を強制的にテキストファイルに保存")
+    args = parser.parse_args()
+
+    named_args = {
+        "input": args.input,
+        "force_save_text": args.force_save_text
+    }
+
+    return Arguments(**named_args)
+
+
+def main(args: Arguments) -> None:
     japanese_stock_dividend_list: List[str] = list()
     global_stock_dividend_list: List[str] = list()
 
@@ -634,6 +654,7 @@ def main() -> None:
         "ファイルパス,配当金等支払日,国内支払日,現地基準日,銘柄コード,銘柄名,分配通貨,外国源泉税率（%）,1単位あたり金額,決済方法,数量,配当金等金額,外国源泉徴収税額,外国手数料,外国精算金額（外貨）,国内源泉徴収税額（外貨）,受取金額,申告レート基準日,申告レート,為替レート基準日,為替レート,配当金等金額（円）,外国源泉徴収税額（円）,国内課税所得額（円）,所得税（外貨）,地方税（外貨）,所得税（円）,地方税（円）,国内源泉徴収税額（外貨）")  # noqa E501
 
     logger.info("処理開始")
+
     for root, _, files in os.walk(input_dir):
         for file_name in files:
             _, ext = os.path.splitext(file_name)
@@ -647,6 +668,10 @@ def main() -> None:
                 logger.debug(f"ファイルスキップ： {file_path}")
                 continue
 
+            if args.input and args.input not in file_path:
+                logger.debug(f"ファイルスキップ： {file_path}")
+                continue
+
             logger.info(f"解析開始: {file_path}")
 
             # PDFをテキストに変換。
@@ -654,6 +679,7 @@ def main() -> None:
             # 読み込みに失敗した場合は、file_path + ".txt"にテキストを出力するため、手修正して再度実行する。
             text = read_rdf(file_path)
 
+            save_text = False
             try:
                 pdf_type = judge_pdf_type(text)
 
@@ -666,13 +692,20 @@ def main() -> None:
                     for data in parse_global_stock_dividend_report(text, pdf_type):
                         data.insert(0, file_path)
                         global_stock_dividend_list.append(",".join(data))
+                
+                if args.force_save_text:
+                    save_text = True
             except Exception as e:
                 logger.error(f"解析エラー: {file_path}")
-                with open(file_path + ".txt", mode="w", encoding="utf-8") as f:
-                    f.write(text)
+                save_text = True
                 raise e
+            finally:
+                if save_text and not exists(file_path + ".txt"):
+                    with open(file_path + ".txt", mode="w", encoding="utf-8") as f:
+                        f.write(text)
 
             logger.info(f"解析終了: {file_path}")
+
 
     logger.info("japanese_stock_dividend.csv 作成開始")
     list2csv(join(output_dir, "japanese_stock_dividend.csv"), japanese_stock_dividend_list)
@@ -693,4 +726,5 @@ if __name__ == "__main__":
     logger.addHandler(stdout_handler)
     # logging.basicConfig(level=logger.DEBUG, format=formatter)
 
-    main()
+    args = parse_arguments()
+    main(args)
