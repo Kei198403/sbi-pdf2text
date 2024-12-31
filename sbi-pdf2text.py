@@ -6,11 +6,12 @@ import os
 import re
 import codecs
 import logging
+import argparse
 
 from os.path import join, exists
 from typing import Final, List, cast, Generator, Tuple
-
 from enum import Enum
+from dataclasses import dataclass
 
 from pdfminer.high_level import extract_text
 from mojimoji import zen_to_han
@@ -62,6 +63,23 @@ def parse_japanese_stock_dividend_report(text: str) -> Generator[List[str], None
     Args:
         text: pdfminerのextract_textの返却値
     """
+
+    def count_page(lines: List[str]) -> int:
+        """ページ数をカウント。
+        
+        各ページに「株式等配当金のお知らせ」が記載されているので、それをカウントする。
+
+        Args:
+            lines: pdfminerのextract_textの返却値
+
+        Returns:
+            int: ページ数
+        """
+        page = 0
+        for line in lines:
+            if "株式等配当金のお知らせ" in line:
+                page += 1
+        return page
 
     def search_start_index(lines: List[str], start_pos: int = 0) -> Tuple[int, int]:
         """銘柄の開始位置を検索
@@ -184,8 +202,13 @@ def parse_japanese_stock_dividend_report(text: str) -> Generator[List[str], None
 
         return add_line_num
 
-
+    # U+000C(\f) Form feedを半角スペースに置換
+    # text.splitlines()で\fも改行として扱われ、実際のテキストファイルの行数とずれるため除去
+    text = text.replace("\f", " ")
     lines = text.splitlines()
+
+    total_page = count_page(lines)
+    process_page = 0
 
     next_start_index = 0
     while True:
@@ -193,20 +216,28 @@ def parse_japanese_stock_dividend_report(text: str) -> Generator[List[str], None
 
         if stock1_start != -1:
             stock2_start += adjust_lines(lines, stock1_start)
+            logger.debug(f"銘柄1の開始行番号: {stock1_start+1}, 先頭行: {lines[stock1_start]}")
             # 5行目から13行目までの情報を除外。4行+10行=14行のデータをparse_dataに渡す（銘柄2と同じ構造）
             yield parse_data(lines[stock1_start:stock1_start+4] + lines[stock1_start+13:stock1_start+23])
+
+            process_page += 1
         else:
             # 銘柄1がない場合は終了
             break
 
         if stock2_start != -1:
             adjust_lines(lines, stock2_start)
+            logger.debug(f"銘柄2の開始行番号: {stock2_start+1}, 先頭行: {lines[stock2_start]}")
             yield parse_data(lines[stock2_start:stock2_start+14])
             # 次のページの開始位置を設定
             next_start_index = stock2_start + 25
         else:
             # 銘柄2がない場合は最終ページのため終了
             break
+    
+    if total_page != process_page:
+        logger.warning(f"ページ数が一致しません。 実際のページ数:{total_page}, 解析したページ数:{process_page}")
+        raise ValueError("ページ数が一致しません。")
 
 
 def parse_global_stock_dividend_report(text: str, pdf_type: PdfType) -> Generator[List[str], None, None]:
@@ -624,8 +655,27 @@ def read_rdf(file_path: str) -> str:
         logger.debug(f"PDFファイル読み込み： {file_path}")
         return extract_text(file_path)
 
+@dataclass
+class Arguments:
+    input: str | None
+    force_save_text: bool
 
-def main() -> None:
+
+def parse_arguments() -> Arguments:
+    parser = argparse.ArgumentParser(description="PDF解析ツール")
+    parser.add_argument("-i", "--input", type=str, default=None, help="解析対象のPDFファイルパス。未指定の場合は、対象ディレクトリを再帰的に解析")
+    parser.add_argument("-f", "--force-save-text", default=False, action="store_true", help="解析結果を強制的にテキストファイルに保存")
+    args = parser.parse_args()
+
+    named_args = {
+        "input": args.input,
+        "force_save_text": args.force_save_text
+    }
+
+    return Arguments(**named_args)
+
+
+def main(args: Arguments) -> None:
     japanese_stock_dividend_list: List[str] = list()
     global_stock_dividend_list: List[str] = list()
 
@@ -634,6 +684,7 @@ def main() -> None:
         "ファイルパス,配当金等支払日,国内支払日,現地基準日,銘柄コード,銘柄名,分配通貨,外国源泉税率（%）,1単位あたり金額,決済方法,数量,配当金等金額,外国源泉徴収税額,外国手数料,外国精算金額（外貨）,国内源泉徴収税額（外貨）,受取金額,申告レート基準日,申告レート,為替レート基準日,為替レート,配当金等金額（円）,外国源泉徴収税額（円）,国内課税所得額（円）,所得税（外貨）,地方税（外貨）,所得税（円）,地方税（円）,国内源泉徴収税額（外貨）")  # noqa E501
 
     logger.info("処理開始")
+
     for root, _, files in os.walk(input_dir):
         for file_name in files:
             _, ext = os.path.splitext(file_name)
@@ -647,6 +698,10 @@ def main() -> None:
                 logger.debug(f"ファイルスキップ： {file_path}")
                 continue
 
+            if args.input and args.input not in file_path:
+                logger.debug(f"ファイルスキップ： {file_path}")
+                continue
+
             logger.info(f"解析開始: {file_path}")
 
             # PDFをテキストに変換。
@@ -654,6 +709,7 @@ def main() -> None:
             # 読み込みに失敗した場合は、file_path + ".txt"にテキストを出力するため、手修正して再度実行する。
             text = read_rdf(file_path)
 
+            save_text = False
             try:
                 pdf_type = judge_pdf_type(text)
 
@@ -666,13 +722,20 @@ def main() -> None:
                     for data in parse_global_stock_dividend_report(text, pdf_type):
                         data.insert(0, file_path)
                         global_stock_dividend_list.append(",".join(data))
+                
+                if args.force_save_text:
+                    save_text = True
             except Exception as e:
                 logger.error(f"解析エラー: {file_path}")
-                with open(file_path + ".txt", mode="w", encoding="utf-8") as f:
-                    f.write(text)
+                save_text = True
                 raise e
+            finally:
+                if save_text and not exists(file_path + ".txt"):
+                    with open(file_path + ".txt", mode="w", encoding="utf-8") as f:
+                        f.write(text)
 
             logger.info(f"解析終了: {file_path}")
+
 
     logger.info("japanese_stock_dividend.csv 作成開始")
     list2csv(join(output_dir, "japanese_stock_dividend.csv"), japanese_stock_dividend_list)
@@ -693,4 +756,5 @@ if __name__ == "__main__":
     logger.addHandler(stdout_handler)
     # logging.basicConfig(level=logger.DEBUG, format=formatter)
 
-    main()
+    args = parse_arguments()
+    main(args)
