@@ -64,6 +64,23 @@ def parse_japanese_stock_dividend_report(text: str) -> Generator[List[str], None
         text: pdfminerのextract_textの返却値
     """
 
+    def count_page(lines: List[str]) -> int:
+        """ページ数をカウント。
+        
+        各ページに「株式等配当金のお知らせ」が記載されているので、それをカウントする。
+
+        Args:
+            lines: pdfminerのextract_textの返却値
+
+        Returns:
+            int: ページ数
+        """
+        page = 0
+        for line in lines:
+            if "株式等配当金のお知らせ" in line:
+                page += 1
+        return page
+
     def search_start_index(lines: List[str], start_pos: int = 0) -> Tuple[int, int]:
         """銘柄の開始位置を検索
 
@@ -188,6 +205,9 @@ def parse_japanese_stock_dividend_report(text: str) -> Generator[List[str], None
 
     lines = text.splitlines()
 
+    total_page = count_page(lines)
+    process_page = 0
+
     next_start_index = 0
     while True:
         (stock1_start, stock2_start) = search_start_index(lines, next_start_index)
@@ -196,6 +216,8 @@ def parse_japanese_stock_dividend_report(text: str) -> Generator[List[str], None
             stock2_start += adjust_lines(lines, stock1_start)
             # 5行目から13行目までの情報を除外。4行+10行=14行のデータをparse_dataに渡す（銘柄2と同じ構造）
             yield parse_data(lines[stock1_start:stock1_start+4] + lines[stock1_start+13:stock1_start+23])
+
+            process_page += 1
         else:
             # 銘柄1がない場合は終了
             break
@@ -208,6 +230,10 @@ def parse_japanese_stock_dividend_report(text: str) -> Generator[List[str], None
         else:
             # 銘柄2がない場合は最終ページのため終了
             break
+    
+    if total_page != process_page:
+        logger.warning(f"ページ数が一致しません。 実際のページ数:{total_page}, 解析したページ数:{process_page}")
+        raise ValueError("ページ数が一致しません。")
 
 
 def parse_global_stock_dividend_report(text: str, pdf_type: PdfType) -> Generator[List[str], None, None]:
