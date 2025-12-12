@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 class PdfType(Enum):
     # 「株式等利益剰余金配当金のお知らせ」電子交付のお知らせ
     JAPANESE_STOCK_DIVIDEND_REPORT = 1
+    JAPANESE_STOCK_DIVIDEND_REPORT_VER_EDITED = 4  # 手修正されたフォーマット
     # 「外国株式等配当金等のご案内（兼）支払通知書」電子交付のお知らせ
     GLOBAL_STOCK_DIVIDEND_REPORT_VER1 = 2   
     GLOBAL_STOCK_DIVIDEND_REPORT_VER2 = 3   # 2021年4月8日あたりからのフォーマット
@@ -41,13 +42,15 @@ def judge_pdf_type(text: str) -> PdfType:
         return PdfType.GLOBAL_STOCK_DIVIDEND_REPORT_VER2
 
     for line in text.splitlines():
+        if "手修正済" in line:
+            return PdfType.JAPANESE_STOCK_DIVIDEND_REPORT_VER_EDITED
         if "株式等配当金のお知らせ" in line:
             return PdfType.JAPANESE_STOCK_DIVIDEND_REPORT
 
     raise NotImplementedError()
 
 
-def parse_japanese_stock_dividend_report(text: str) -> Generator[List[str], None, None]:
+def parse_japanese_stock_dividend_report(text: str, pdf_type: PdfType) -> Generator[List[str], None, None]:
     """『「株式等利益剰余金配当金のお知らせ」電子交付のお知らせ』PDFを解析して、情報を抽出。
 
     ・銘柄名： df.loc[3][0] または df.loc[8][0]。情報がない場合は、「以下余白」が入る。
@@ -62,6 +65,7 @@ def parse_japanese_stock_dividend_report(text: str) -> Generator[List[str], None
 
     Args:
         text: pdfminerのextract_textの返却値
+        pdf_type: PDFの種類
     """
 
     def count_page(lines: List[str]) -> int:
@@ -154,6 +158,7 @@ def parse_japanese_stock_dividend_report(text: str) -> Generator[List[str], None
         Returns:
             List[str]: _description_
         """
+
         assert len(lines) == 14
 
         data: List[str] = []
@@ -202,42 +207,88 @@ def parse_japanese_stock_dividend_report(text: str) -> Generator[List[str], None
 
         return add_line_num
 
-    # U+000C(\f) Form feedを半角スペースに置換
-    # text.splitlines()で\fも改行として扱われ、実際のテキストファイルの行数とずれるため除去
-    text = text.replace("\f", " ")
-    lines = text.splitlines()
+    if pdf_type == PdfType.JAPANESE_STOCK_DIVIDEND_REPORT:
+        # U+000C(\f) Form feedを半角スペースに置換
+        # text.splitlines()で\fも改行として扱われ、実際のテキストファイルの行数とずれるため除去
+        text = text.replace("\f", " ")
+        lines = text.splitlines()
 
-    total_page = count_page(lines)
-    process_page = 0
+        total_page = count_page(lines)
+        process_page = 0
 
-    next_start_index = 0
-    while True:
-        (stock1_start, stock2_start) = search_start_index(lines, next_start_index)
+        next_start_index = 0
+        while True:
+            (stock1_start, stock2_start) = search_start_index(lines, next_start_index)
 
-        if stock1_start != -1:
-            stock2_start += adjust_lines(lines, stock1_start)
-            logger.debug(f"銘柄1の開始行番号: {stock1_start+1}, 先頭行: {lines[stock1_start]}")
-            # 5行目から13行目までの情報を除外。4行+10行=14行のデータをparse_dataに渡す（銘柄2と同じ構造）
-            yield parse_data(lines[stock1_start:stock1_start+4] + lines[stock1_start+13:stock1_start+23])
+            if stock1_start != -1:
+                stock2_start += adjust_lines(lines, stock1_start)
+                logger.debug(f"銘柄1の開始行番号: {stock1_start+1}, 先頭行: {lines[stock1_start]}")
+                # 5行目から13行目までの情報を除外。4行+10行=14行のデータをparse_dataに渡す（銘柄2と同じ構造）
+                yield parse_data(lines[stock1_start:stock1_start+4] + lines[stock1_start+13:stock1_start+23])
 
-            process_page += 1
-        else:
-            # 銘柄1がない場合は終了
-            break
+                process_page += 1
+            else:
+                # 銘柄1がない場合は終了
+                break
 
-        if stock2_start != -1:
-            adjust_lines(lines, stock2_start)
-            logger.debug(f"銘柄2の開始行番号: {stock2_start+1}, 先頭行: {lines[stock2_start]}")
-            yield parse_data(lines[stock2_start:stock2_start+14])
-            # 次のページの開始位置を設定
-            next_start_index = stock2_start + 25
-        else:
-            # 銘柄2がない場合は最終ページのため終了
-            break
-    
-    if total_page != process_page:
-        logger.warning(f"ページ数が一致しません。 実際のページ数:{total_page}, 解析したページ数:{process_page}")
-        raise ValueError("ページ数が一致しません。")
+            if stock2_start != -1:
+                adjust_lines(lines, stock2_start)
+                logger.debug(f"銘柄2の開始行番号: {stock2_start+1}, 先頭行: {lines[stock2_start]}")
+                yield parse_data(lines[stock2_start:stock2_start+14])
+                # 次のページの開始位置を設定
+                next_start_index = stock2_start + 25
+            else:
+                # 銘柄2がない場合は最終ページのため終了
+                break
+        
+        if total_page != process_page:
+            logger.warning(f"ページ数が一致しません。 実際のページ数:{total_page}, 解析したページ数:{process_page}")
+            raise ValueError("ページ数が一致しません。")
+    elif pdf_type == PdfType.JAPANESE_STOCK_DIVIDEND_REPORT_VER_EDITED:
+        # 手修正されたフォーマットの場合の処理を実装
+        data_start = False
+        data_counter = 0
+        i = 0
+        lines = text.splitlines()
+        
+        while i < len(lines):
+            if "手修正済" in lines[i]:
+                i += 1
+            elif lines[i].startswith("#"):
+                data_start = True
+                i += 1
+            elif data_start:
+                data_start = False
+                # parse_data()に渡すデータを生成
+                data = [
+                    lines[i+0],  # 0:銘柄名
+                    "",          # 1:空行
+                    lines[i+1],  # 2:銘柄コード
+                    "",          # 3:空行
+                    lines[i+2], # 4:お支払日、配当単価、数量
+                    "",          # 5:空行
+                    lines[i+3],  # 6:配当金額、所得税、地方税
+                    "",          # 7:空行
+                    lines[i+4],  # 8:端数処理代金、お受取金額
+                    "",          # 9:空行
+                    "",          # 10:特定口座配当等受入対象（空行）
+                    "",          # 11:空行
+                    "",          # 12:日付（空行）
+                    ""           # 13:空行
+                ]
+                yield parse_data(data)
+
+                # 1銘柄5行で構成
+                i += 5
+                data_counter += 1
+            else:
+                i += 1
+        
+        if data_counter == 0:
+            logger.warning("手修正フォーマットの解析でデータが見つかりませんでした。データNoが設定されていない可能性があります。")
+            raise ValueError("手修正フォーマットの解析でデータが見つかりませんでした。データNoが設定されていない可能性があります。")
+    else:
+        raise NotImplementedError("対応していないPDFタイプです。")
 
 
 def parse_global_stock_dividend_report(text: str, pdf_type: PdfType) -> Generator[List[str], None, None]:
@@ -715,7 +766,7 @@ def main(args: Arguments) -> None:
 
                 logger.debug(f"PDFタイプ： {pdf_type}")
                 if pdf_type == PdfType.JAPANESE_STOCK_DIVIDEND_REPORT:
-                    for data in parse_japanese_stock_dividend_report(text):
+                    for data in parse_japanese_stock_dividend_report(text, pdf_type):
                         data.insert(0, file_path)
                         japanese_stock_dividend_list.append(",".join(data))
                 else:
