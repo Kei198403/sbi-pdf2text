@@ -765,7 +765,8 @@ def main(args: Arguments) -> None:
                 pdf_type = judge_pdf_type(text)
 
                 logger.debug(f"PDFタイプ： {pdf_type}")
-                if pdf_type == PdfType.JAPANESE_STOCK_DIVIDEND_REPORT:
+                if pdf_type == PdfType.JAPANESE_STOCK_DIVIDEND_REPORT \
+                    or pdf_type == PdfType.JAPANESE_STOCK_DIVIDEND_REPORT_VER_EDITED:
                     for data in parse_japanese_stock_dividend_report(text, pdf_type):
                         data.insert(0, file_path)
                         japanese_stock_dividend_list.append(",".join(data))
